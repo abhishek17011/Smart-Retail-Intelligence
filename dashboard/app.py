@@ -549,16 +549,24 @@ elif page == "Sales Performance":
     download_controls(monthly, "monthly_sales.csv")
 
 
+
 # =========================================================
-# PAGE 3: CUSTOMER INTELLIGENCE
+# PAGE 3: CUSTOMER INTELLIGENCE + PRODUCT INTELLIGENCE
 # =========================================================
 
 elif page == "Customer Intelligence":
 
     show_header(
         "Customer Intelligence",
-        "RFM analysis and machine learning based customer segmentation."
+        "Customer behaviour, RFM analysis, K-Means segmentation and product insights."
     )
+
+    # =====================================================
+    # SECTION 1: CUSTOMER ANALYSIS
+    # =====================================================
+
+    st.header("1. Customer Analysis")
+    st.caption("Understand customer behaviour using RFM and K-Means clustering.")
 
     if segments.empty:
 
@@ -568,8 +576,6 @@ elif page == "Customer Intelligence":
 
         customer_segments = segments.copy()
 
-        # Restrict customer segmentation to the filtered
-        # customer population for geographic/date filters.
         valid_customers = set(filtered["CustomerID"].dropna())
 
         if "customer_key" in customer_segments.columns:
@@ -601,25 +607,30 @@ elif page == "Customer Intelligence":
                     )
 
                     customer_segments = customer_segments[
-                        customer_segments["customer_id"].isin(
-                            valid_customers
-                        )
+                        customer_segments["customer_id"].isin(valid_customers)
                     ]
 
                 except Exception:
                     pass
 
         if customer_segments.empty:
+
             st.info("No customer segmentation records match the current filters.")
+
         else:
 
             a, b, c = st.columns(3)
 
-            a.metric("Customers in Analysis", len(customer_segments))
+            a.metric(
+                "Customers in Analysis",
+                len(customer_segments)
+            )
+
             b.metric(
                 "Clusters",
                 customer_segments["Cluster"].nunique()
             )
+
             c.metric(
                 "Average Spending",
                 f"£{customer_segments['Monetary'].mean():,.2f}"
@@ -630,7 +641,9 @@ elif page == "Customer Intelligence":
             summary = (
                 customer_segments.groupby("Cluster")
                 [["Recency", "Frequency", "Monetary"]]
-                .mean().round(2).reset_index()
+                .mean()
+                .round(2)
+                .reset_index()
             )
 
             col1, col2 = st.columns(2)
@@ -677,10 +690,191 @@ elif page == "Customer Intelligence":
                 "customer_segments.csv"
             )
 
+    # =====================================================
+    # SECTION 2: RFM ANALYSIS
+    # =====================================================
+
     if not rfm.empty:
-        with st.expander("View RFM analysis records"):
+
+        st.divider()
+        st.subheader("RFM Analysis")
+
+        with st.expander("View RFM Analysis Records"):
+
             st.dataframe(rfm, use_container_width=True)
-            download_controls(rfm, "rfm_analysis.csv")
+
+            download_controls(
+                rfm,
+                "rfm_analysis.csv"
+            )
+
+    # =====================================================
+    # SECTION 3: PRODUCT ANALYSIS
+    # =====================================================
+
+    st.divider()
+
+    st.header("2. Product Analysis")
+    st.caption("Understand product sales, revenue and purchasing quantity.")
+
+    product_data = filtered.copy()
+
+    required_columns = ["StockCode", "Quantity", "UnitPrice"]
+
+    if all(col in product_data.columns for col in required_columns):
+
+        product_data["Quantity"] = pd.to_numeric(
+            product_data["Quantity"], errors="coerce"
+        )
+
+        product_data["UnitPrice"] = pd.to_numeric(
+            product_data["UnitPrice"], errors="coerce"
+        )
+
+        # Remove invalid and return transactions for sales charts
+        product_data = product_data[
+            (product_data["Quantity"] > 0) &
+            (product_data["UnitPrice"] > 0)
+        ].copy()
+
+        # Calculate product revenue
+        product_data["ProductRevenue"] = (
+            product_data["Quantity"] * product_data["UnitPrice"]
+        )
+
+        # Product name
+        if "Description" in product_data.columns:
+            product_data["ProductName"] = (
+                product_data["Description"]
+                .fillna(product_data["StockCode"].astype(str))
+            )
+        else:
+            product_data["ProductName"] = (
+                product_data["StockCode"].astype(str)
+            )
+
+        if product_data.empty:
+
+            st.info("No product sales records available for the selected filters.")
+
+        else:
+
+            # Product summary
+            product_summary = (
+                product_data.groupby("ProductName")
+                .agg(
+                    Total_Quantity=("Quantity", "sum"),
+                    Total_Revenue=("ProductRevenue", "sum"),
+                    Total_Orders=("StockCode", "count")
+                )
+                .reset_index()
+            )
+
+            # Top selling products
+            top_quantity = product_summary.nlargest(
+                10, "Total_Quantity"
+            )
+
+            # Highest revenue products
+            top_revenue = product_summary.nlargest(
+                10, "Total_Revenue"
+            )
+
+            # Product metrics
+            a, b, c = st.columns(3)
+
+            a.metric(
+                "Total Products",
+                product_data["StockCode"].nunique()
+            )
+
+            b.metric(
+                "Total Quantity Sold",
+                f"{product_data['Quantity'].sum():,.0f}"
+            )
+
+            c.metric(
+                "Total Product Revenue",
+                f"£{product_data['ProductRevenue'].sum():,.2f}"
+            )
+
+            st.divider()
+
+            # Top 10 products by quantity
+            col1, col2 = st.columns(2)
+
+            fig = px.bar(
+                top_quantity.sort_values("Total_Quantity"),
+                x="Total_Quantity",
+                y="ProductName",
+                orientation="h",
+                title="Top 10 Best Selling Products",
+                labels={
+                    "Total_Quantity": "Quantity Sold",
+                    "ProductName": "Product"
+                }
+            )
+
+            col1.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
+            # Top 10 products by revenue
+            fig = px.bar(
+                top_revenue.sort_values("Total_Revenue"),
+                x="Total_Revenue",
+                y="ProductName",
+                orientation="h",
+                title="Top 10 Products by Revenue",
+                labels={
+                    "Total_Revenue": "Revenue (£)",
+                    "ProductName": "Product"
+                }
+            )
+
+            col2.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
+            # Product quantity vs revenue
+            fig = px.scatter(
+                product_summary,
+                x="Total_Quantity",
+                y="Total_Revenue",
+                hover_name="ProductName",
+                size="Total_Orders",
+                title="Product Quantity vs Revenue",
+                labels={
+                    "Total_Quantity": "Quantity Sold",
+                    "Total_Revenue": "Revenue (£)"
+                }
+            )
+
+            make_chart(fig)
+
+            # Product summary table
+            st.subheader("Product Performance Summary")
+
+            st.dataframe(
+                product_summary.sort_values(
+                    "Total_Revenue",
+                    ascending=False
+                ),
+                use_container_width=True
+            )
+
+            download_controls(
+                product_summary,
+                "product_analysis.csv"
+            )
+
+    else:
+
+        st.warning(
+            "Product analysis requires StockCode, Quantity and UnitPrice columns."
+        )
 
 
 # =========================================================
